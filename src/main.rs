@@ -6,6 +6,7 @@ use rspotify::{
 };
 use serde::Deserialize;
 use std::env;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, PartialEq, Clone)]
 struct Date {
@@ -44,29 +45,6 @@ struct PlaylistResponse {
     data: Vec<PlaylistItem>,
 }
 
-#[cfg(test)]
-mod test {
-
-    #[test]
-    fn test_playlist_item_deserialization() {
-        let json = r#"{"since":"2024-09-01T00:03:10+02:00","id":20862650,"interpret":"LYNKS","interpret_id":33859,"track":"Tennis Song","track_id":114355,"itemcode":"9779240","files":[{"source":"gselector","id":"9779240","asset":"http:\/\/data.rozhlas.cz\/api\/v2\/asset\/cover\/gselector\/9779240.jpg","asset_width":240,"asset_height":240}]}"#;
-        let item: super::PlaylistItem = serde_json::from_str(json).unwrap();
-        assert_eq!(item.interpret, "LYNKS".to_string());
-        assert_eq!(item.track, "Tennis Song".to_string());
-    }
-}
-
-async fn fetch_radio_playlist(date: Date) -> Result<PlaylistResponse, reqwest::Error> {
-    let url = format!(
-        "https://api.rozhlas.cz/data/v2/playlist/day/{:04}/{:02}/{:02}/radiowave.json",
-        date.year, date.month, date.day
-    );
-    let client = Client::new();
-    let response = client.get(&url).send().await?;
-    let playlist = response.json::<PlaylistResponse>().await?;
-    Ok(playlist)
-}
-
 async fn create_spotify_playlist(
     date: Date,
     tracks: Vec<String>,
@@ -75,8 +53,8 @@ async fn create_spotify_playlist(
 
     // Using every possible scope
     let scopes = scopes!(
-        // "playlist-read-collaborative",
-        // "playlist-read-private",
+        "user-read-private",
+        "user-read-email",
         "playlist-modify-public",
         "playlist-modify-private"
     );
@@ -137,6 +115,12 @@ async fn create_spotify_playlist(
 
 #[tokio::main]
 async fn main() {
+    // Initialize tracing
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        // .with_span_events(FmtSpan::CLOSE)
+        .init();
+
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
         eprintln!("Usage: {} <date in YYYY-MM-DD format>", args[0]);
@@ -162,4 +146,27 @@ async fn main() {
         }
         Err(e) => eprintln!("Error fetching radio playlist: {}", e),
     };
+}
+
+async fn fetch_radio_playlist(date: Date) -> Result<PlaylistResponse, reqwest::Error> {
+    let url = format!(
+        "https://api.rozhlas.cz/data/v2/playlist/day/{:04}/{:02}/{:02}/radiowave.json",
+        date.year, date.month, date.day
+    );
+    let client = Client::new();
+    let response = client.get(&url).send().await?;
+    let playlist = response.json::<PlaylistResponse>().await?;
+    Ok(playlist)
+}
+
+#[cfg(test)]
+mod test {
+
+    #[test]
+    fn test_playlist_item_deserialization() {
+        let json = r#"{"since":"2024-09-01T00:03:10+02:00","id":20862650,"interpret":"LYNKS","interpret_id":33859,"track":"Tennis Song","track_id":114355,"itemcode":"9779240","files":[{"source":"gselector","id":"9779240","asset":"http:\/\/data.rozhlas.cz\/api\/v2\/asset\/cover\/gselector\/9779240.jpg","asset_width":240,"asset_height":240}]}"#;
+        let item: super::PlaylistItem = serde_json::from_str(json).unwrap();
+        assert_eq!(item.interpret, "LYNKS".to_string());
+        assert_eq!(item.track, "Tennis Song".to_string());
+    }
 }
