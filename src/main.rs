@@ -104,9 +104,9 @@ async fn create_spotify_playlist(
             spotify
                 .playlist_add_items(playlist.id.clone(), [PlayableId::Track(id)], None)
                 .await?;
-            println!("- Added track: {}", name);
+            println!("- Added track: {name}");
         } else {
-            eprintln!("- Track not found: {}", track);
+            eprintln!("- Track not found: {track}");
         }
     }
 
@@ -141,10 +141,10 @@ async fn main() {
                 .map(|item| format!("{} {}", item.interpret, item.track))
                 .collect();
             if let Err(e) = create_spotify_playlist(date, tracks).await {
-                eprintln!("Error creating Spotify playlist: {}", e);
+                eprintln!("Error creating Spotify playlist: {e}");
             }
         }
-        Err(e) => eprintln!("Error fetching radio playlist: {}", e),
+        Err(e) => eprintln!("Error fetching radio playlist: {e}"),
     };
 }
 
