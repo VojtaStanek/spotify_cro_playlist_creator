@@ -49,7 +49,7 @@ async fn create_spotify_playlist(
     date: Date,
     tracks: Vec<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let creds = Credentials::from_env().unwrap();
+    let creds = Credentials::from_env().expect("Missing Spotify credentials in env");
 
     // Using every possible scope
     let scopes = scopes!(
