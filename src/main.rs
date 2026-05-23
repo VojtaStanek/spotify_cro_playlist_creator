@@ -80,6 +80,9 @@ async fn create_spotify_playlist(
         .await?;
 
     for track in tracks {
+        // remove ft. and feat. from track name to improve search results
+        let track = track.replace(" ft. ", " ").replace(" feat. ", " ");
+
         let search_result = spotify
             .search(
                 &track,
@@ -98,13 +101,23 @@ async fn create_spotify_playlist(
         };
 
         if let Some(FullTrack {
-            id: Some(id), name, ..
+            id: Some(id),
+            name,
+            artists,
+            ..
         }) = mayble_track
         {
             spotify
                 .playlist_add_items(playlist.id.clone(), [PlayableId::Track(id)], None)
                 .await?;
-            println!("- Added track: {name}");
+            println!(
+                "- Added track: {name} by {artists} (was in CRo playlist as {track})",
+                artists = artists
+                    .iter()
+                    .map(|a| a.name.clone())
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            );
         } else {
             eprintln!("- Track not found: {track}");
         }
