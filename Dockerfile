@@ -1,13 +1,28 @@
-# ---- Builder ----
-FROM rust:1-bookworm AS builder
-
+# ---- Chef base ----
+# cargo-chef lets us cache dependency compilation as its own layer, so editing
+# first-party source doesn't recompile every crate from scratch.
+FROM rust:1-bookworm AS chef
+RUN cargo install cargo-chef
 WORKDIR /app
 
-# Copy the full source. Templates are needed at compile time (askama embeds them).
+# ---- Planner ----
+# Produce a dependency "recipe" describing exactly which crates to build.
+FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY templates ./templates
+RUN cargo chef prepare --recipe-path recipe.json
 
+# ---- Builder ----
+FROM chef AS builder
+# Build (and cache) only the dependencies first.
+COPY --from=planner /app/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
+# Then build the application itself. Templates are needed at compile time
+# (askama embeds them into the binary).
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY templates ./templates
 RUN cargo build --release
 
 # ---- Runtime ----

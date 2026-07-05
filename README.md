@@ -123,17 +123,50 @@ Note the redirect-URI/port constraint above also applies inside Docker.
 
 ## Google Cloud Run deployment
 
-- The service listens on `0.0.0.0:$PORT`; Cloud Run sets `PORT` automatically.
-- Set `RSPOTIFY_CLIENT_ID` and `RSPOTIFY_CLIENT_SECRET` as Cloud Run secrets / env vars.
-- Set `RSPOTIFY_REDIRECT_URI=https://<service-url>/callback` and add that exact URL
-  as a Redirect URI in the Spotify Developer Dashboard (keep the localhost one for
-  CLI / local dev).
-- Raise the request timeout (~600s) so long SSE streams are not cut off.
-- Set `SESSION_SECRET` (64+ random bytes, e.g. `openssl rand -base64 64`) as a Cloud
-  Run secret. Because sessions live entirely in an encrypted cookie keyed on this
-  secret, logins survive restarts and work across any number of instances as long as
-  every instance shares the same `SESSION_SECRET`. You can scale freely — the previous
-  `min/max-instances=1` requirement no longer applies.
+Deployment is automated: a one-time `gcloud` setup provisions the infrastructure, and
+GitHub Actions builds and deploys on every push to `main` — using Workload Identity
+Federation, so no service-account key is ever stored in GitHub.
+
+Runtime notes: the service listens on `0.0.0.0:$PORT` (Cloud Run sets `PORT`), the
+request timeout is raised to 600s so long SSE streams aren't cut off, and secrets come
+from Secret Manager. Sessions live entirely in an encrypted cookie keyed on
+`SESSION_SECRET`, so logins survive restarts and span any number of instances — scale
+freely.
+
+### One-time setup
+
+Run the setup script once (needs Owner/Editor on the `stanekv-eu-shared` project). It
+enables APIs, creates the Artifact Registry repo, runtime/deployer service accounts,
+Secret Manager secrets, and the Workload Identity Federation pool/provider:
+
+```bash
+./scripts/gcp-setup.sh
+```
+
+It prints the value for the `GCP_WIF_PROVIDER` GitHub repo variable. In the GitHub repo,
+under **Settings → Secrets and variables → Actions → Variables**, add:
+
+- `GCP_WIF_PROVIDER` — the provider resource name printed by the script.
+- `RSPOTIFY_REDIRECT_URI` — set after the first deploy (see below).
+
+### Deploy
+
+Push to `main` (or run the **Deploy to Cloud Run** workflow manually). The workflow
+(`.github/workflows/deploy.yml`) builds the image with Docker Buildx + GHA layer cache,
+pushes it to Artifact Registry, and deploys a new Cloud Run revision.
+
+**Redirect-URI bootstrap** (one-time): the Cloud Run URL isn't known until the service
+exists, so the first deploy runs without `RSPOTIFY_REDIRECT_URI` (OAuth login won't
+complete yet). Then:
+
+```bash
+gcloud run services describe cro-spotify-playlist --region=europe-west1 \
+  --format='value(status.url)'
+```
+
+Set the `RSPOTIFY_REDIRECT_URI` repo variable to `<url>/callback`, add that same URL as
+a Redirect URI in the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+(keep the localhost one for CLI / local dev), and re-run the workflow.
 
 ## API Reference
 

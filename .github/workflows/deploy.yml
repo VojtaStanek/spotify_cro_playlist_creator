@@ -1,0 +1,68 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: stanekv-eu-shared
+  REGION: europe-west1
+  SERVICE: cro-spotify-playlist
+  IMAGE: europe-west1-docker.pkg.dev/stanekv-eu-shared/cro-spotify-playlist/web
+  DEPLOYER_SA: github-deployer@stanekv-eu-shared.iam.gserviceaccount.com
+  RUNTIME_SA: cro-run@stanekv-eu-shared.iam.gserviceaccount.com
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write        # required for Workload Identity Federation
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER_SA }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker europe-west1-docker.pkg.dev --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE }}
+          region: ${{ env.REGION }}
+          image: ${{ env.IMAGE }}:${{ github.sha }}
+          flags: >-
+            --allow-unauthenticated
+            --service-account=${{ env.RUNTIME_SA }}
+            --timeout=600
+            --min-instances=0
+          secrets: |
+            RSPOTIFY_CLIENT_ID=RSPOTIFY_CLIENT_ID:latest
+            RSPOTIFY_CLIENT_SECRET=RSPOTIFY_CLIENT_SECRET:latest
+            SESSION_SECRET=SESSION_SECRET:latest
+          env_vars: |
+            RSPOTIFY_REDIRECT_URI=${{ vars.RSPOTIFY_REDIRECT_URI }}
