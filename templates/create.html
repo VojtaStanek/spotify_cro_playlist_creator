@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block content %}
+<p>Building playlist for <strong>{{ date }}</strong>…</p>
+
+<div id="app" data-date="{{ date }}" style="display: none"></div>
+
+<ul id="progress"></ul>
+
+<p id="result" style="display: none">
+  <a class="button" id="playlist-link" href="#" target="_blank" rel="noopener">Open playlist in Spotify</a>
+</p>
+
+<p id="status" class="muted">Working…</p>
+
+<p><a href="/">Back</a></p>
+
+<script>
+  (function () {
+    var date = document.getElementById("app").dataset.date;
+    var progress = document.getElementById("progress");
+    var status = document.getElementById("status");
+    var result = document.getElementById("result");
+    var link = document.getElementById("playlist-link");
+
+    function append(text) {
+      var li = document.createElement("li");
+      li.textContent = text;
+      progress.appendChild(li);
+    }
+
+    var source = new EventSource("/create/stream?date=" + encodeURIComponent(date));
+
+    source.onmessage = function (e) {
+      append(e.data);
+    };
+
+    source.addEventListener("done", function (e) {
+      status.textContent = "Done!";
+      if (e.data) {
+        link.href = e.data;
+        result.style.display = "block";
+      }
+      source.close();
+    });
+
+    source.addEventListener("error", function (e) {
+      if (e.data) {
+        append("Error: " + e.data);
+        status.textContent = "Failed.";
+        source.close();
+      } else {
+        // Connection-level error; browser will retry automatically.
+        status.textContent = "Connection interrupted…";
+      }
+    });
+  })();
+</script>
+{% endblock %}

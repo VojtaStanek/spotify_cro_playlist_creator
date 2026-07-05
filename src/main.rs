@@ -1,53 +1,60 @@
-use reqwest::Client;
-use rspotify::{
-    model::{misc::Market, FullTrack, Page, PlayableId, SearchResult, SearchType},
-    prelude::{BaseClient, OAuthClient},
-    scopes, AuthCodeSpotify, Credentials, OAuth,
-};
-use serde::Deserialize;
+use rspotify::{prelude::OAuthClient, scopes, AuthCodeSpotify, Credentials, OAuth};
 use std::env;
 use tracing_subscriber::EnvFilter;
 
-#[derive(Debug, PartialEq, Clone)]
-struct Date {
-    year: i32,
-    month: u32,
-    day: u32,
-}
+use spotify_cro_playlist_creator::{
+    create_playlist, fetch_radio_playlist, find_and_add_track, track_query, Date, TrackOutcome,
+};
 
-impl Date {
-    fn from_str(date: &str) -> Option<Date> {
-        let parts: Vec<&str> = date.split('-').collect();
-        if parts.len() != 3 {
-            return None;
+mod web;
+
+#[tokio::main]
+async fn main() {
+    // Load .env in local dev (no-op if the file is absent).
+    dotenvy::dotenv().ok();
+
+    // Initialize tracing
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+
+    let args: Vec<String> = env::args().collect();
+
+    // CLI mode: exactly one argument that parses as a YYYY-MM-DD date.
+    if args.len() == 2 {
+        if let Some(date) = Date::from_str(args[1].as_str()) {
+            run_cli(date).await;
+            return;
         }
-        let year = parts[0].parse().ok()?;
-        let month = parts[1].parse().ok()?;
-        let day = parts[2].parse().ok()?;
-        Some(Date { year, month, day })
+    }
+
+    // Otherwise: start the web server.
+    if let Err(e) = web::run().await {
+        eprintln!("Web server error: {e}");
+        std::process::exit(1);
     }
 }
 
-impl std::fmt::Display for Date {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{:04}-{:02}-{:02}", self.year, self.month, self.day)
+/// The original interactive CLI flow, now built on the shared library helpers.
+async fn run_cli(date: Date) {
+    println!("Fetching playlist for {date}");
+
+    let playlist = match fetch_radio_playlist(&date).await {
+        Ok(playlist) => playlist,
+        Err(e) => {
+            eprintln!("Error fetching radio playlist: {e}");
+            return;
+        }
+    };
+
+    if let Err(e) = create_spotify_playlist(&date, &playlist).await {
+        eprintln!("Error creating Spotify playlist: {e}");
     }
-}
-
-#[derive(Deserialize)]
-struct PlaylistItem {
-    interpret: String,
-    track: String,
-}
-
-#[derive(Deserialize)]
-struct PlaylistResponse {
-    data: Vec<PlaylistItem>,
 }
 
 async fn create_spotify_playlist(
-    date: Date,
-    tracks: Vec<String>,
+    date: &Date,
+    playlist: &spotify_cro_playlist_creator::PlaylistResponse,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let creds = Credentials::from_env().expect("Missing Spotify credentials in env");
 
@@ -66,120 +73,19 @@ async fn create_spotify_playlist(
     // This function requires the `cli` feature enabled.
     spotify.prompt_for_token(&url).await.unwrap();
 
-    let user_id = spotify.me().await?.id;
-    let playlist_name = format!("Radio Wave {date}");
-    let playlist_description = format!("Playlist for Radio Wave for {date}");
-    let playlist = spotify
-        .user_playlist_create(
-            user_id,
-            &playlist_name,
-            Some(false),
-            Some(false),
-            Some(&playlist_description),
-        )
-        .await?;
+    let created = create_playlist(&spotify, date).await?;
 
-    for track in tracks {
-        // remove ft. and feat. from track name to improve search results
-        let track = track.replace(" ft. ", " ").replace(" feat. ", " ");
-
-        let search_result = spotify
-            .search(
-                &track,
-                SearchType::Track,
-                Some(Market::FromToken),
-                None,
-                Some(1),
-                None,
-            )
-            .await?;
-
-        let mayble_track = if let SearchResult::Tracks(Page { items, .. }) = search_result {
-            items.first().cloned()
-        } else {
-            None
-        };
-
-        if let Some(FullTrack {
-            id: Some(id),
-            name,
-            artists,
-            ..
-        }) = mayble_track
-        {
-            spotify
-                .playlist_add_items(playlist.id.clone(), [PlayableId::Track(id)], None)
-                .await?;
-            println!(
-                "- Added track: {name} by {artists} (was in CRo playlist as {track})",
-                artists = artists
-                    .iter()
-                    .map(|a| a.name.clone())
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            );
-        } else {
-            eprintln!("- Track not found: {track}");
+    for item in &playlist.data {
+        let query = track_query(item);
+        match find_and_add_track(&spotify, &created.id, &query).await? {
+            TrackOutcome::Added { name, artists } => {
+                println!("- Added track: {name} by {artists} (CRo playlist entry: {query})");
+            }
+            TrackOutcome::NotFound => {
+                eprintln!("- Track not found: {query}");
+            }
         }
     }
 
     Ok(())
-}
-
-#[tokio::main]
-async fn main() {
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        // .with_span_events(FmtSpan::CLOSE)
-        .init();
-
-    let args: Vec<String> = env::args().collect();
-    if args.len() != 2 {
-        eprintln!("Usage: {} <date in YYYY-MM-DD format>", args[0]);
-        std::process::exit(1);
-    }
-    let date = Date::from_str(args[1].as_str()).unwrap_or_else(|| {
-        eprintln!("Invalid date format");
-        std::process::exit(1);
-    });
-
-    println!("Fetching playlist for {date}");
-
-    match fetch_radio_playlist(date.clone()).await {
-        Ok(playlist) => {
-            let tracks: Vec<String> = playlist
-                .data
-                .iter()
-                .map(|item| format!("{} {}", item.interpret, item.track))
-                .collect();
-            if let Err(e) = create_spotify_playlist(date, tracks).await {
-                eprintln!("Error creating Spotify playlist: {e}");
-            }
-        }
-        Err(e) => eprintln!("Error fetching radio playlist: {e}"),
-    };
-}
-
-async fn fetch_radio_playlist(date: Date) -> Result<PlaylistResponse, reqwest::Error> {
-    let url = format!(
-        "https://api.rozhlas.cz/data/v2/playlist/day/{:04}/{:02}/{:02}/radiowave.json",
-        date.year, date.month, date.day
-    );
-    let client = Client::new();
-    let response = client.get(&url).send().await?;
-    let playlist = response.json::<PlaylistResponse>().await?;
-    Ok(playlist)
-}
-
-#[cfg(test)]
-mod test {
-
-    #[test]
-    fn test_playlist_item_deserialization() {
-        let json = r#"{"since":"2024-09-01T00:03:10+02:00","id":20862650,"interpret":"LYNKS","interpret_id":33859,"track":"Tennis Song","track_id":114355,"itemcode":"9779240","files":[{"source":"gselector","id":"9779240","asset":"http:\/\/data.rozhlas.cz\/api\/v2\/asset\/cover\/gselector\/9779240.jpg","asset_width":240,"asset_height":240}]}"#;
-        let item: super::PlaylistItem = serde_json::from_str(json).unwrap();
-        assert_eq!(item.interpret, "LYNKS".to_string());
-        assert_eq!(item.track, "Tennis Song".to_string());
-    }
 }

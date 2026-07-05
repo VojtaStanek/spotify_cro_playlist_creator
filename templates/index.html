@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% if logged_in %}
+<p>You are logged in with Spotify. Pick a date to build the playlist.</p>
+<form action="/create" method="get">
+  <input type="date" name="date" required />
+  <button type="submit">Create playlist</button>
+</form>
+<p class="muted"><a href="/logout">Log out</a></p>
+{% else %}
+<p>Log in with your Spotify account to create playlists in your own library.</p>
+<p><a class="button" href="/login">Login with Spotify</a></p>
+{% endif %}
+{% endblock %}
